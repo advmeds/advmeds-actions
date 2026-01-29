@@ -1,0 +1,19 @@
+name: 'PR Review Stats'
+description: '取得 PR 的 Reviewer 數量與審核狀態'
+branding:
+  icon: 'user-check'
+  color: 'blue'
+inputs:
+  github-token:
+    description: 'GitHub Token'
+    required: true
+outputs:
+  reviewers-count:
+    description: '總共的 Reviewers 數量'
+  approved-count:
+    description: '已經 Approved 的數量'
+  all-approved:
+    description: '是否全部人都已 Approved'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
