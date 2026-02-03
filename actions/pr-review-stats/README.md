@@ -1,4 +1,3 @@
-````markdown
 # How to use in Workflow
 
 ```yml
@@ -16,7 +15,7 @@ jobs:
 
       - name: Get PR Stats
         id: pr-stats
-        uses: ./
+        uses: advmeds/advmeds-actions/actions/pr-review-stats@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -25,9 +24,4 @@ jobs:
         run: echo "🎉 所有人皆已同意，可以合併囉！"
 
 run: echo "🎉 Everyone has agreed, we can merge now!"
-```
-````
-
-```
-
 ```
