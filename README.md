@@ -1,27 +1,28 @@
-# How to use in Workflow
+# advmeds-actions
 
-```yml
-on:
-  pull_request_review:
-    types: [submitted, dismissed]
-  pull_request:
-    types: [review_requested]
+Monorepo for custom GitHub Actions
 
-jobs:
-  check-status:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Get PR Stats
-        id: pr-stats
-        uses: ./ 
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+## Actions
 
-      - name: Do something if all approved
-        if: steps.pr-stats.outputs.all-approved == 'true'
-        run: echo "🎉 所有人皆已同意，可以合併囉！"
+- [pr-review-stats](./actions/pr-review-stats) - 取得 PR 的 Reviewer 數量與審核狀態
 
-run: echo "🎉 Everyone has agreed, we can merge now!"
+## Development
+
+This project uses pnpm workspaces for monorepo management.
+
+### Setup
+
+```bash
+pnpm install
+```
+
+### Build
+
+```bash
+# Build all actions
+pnpm build
+
+# Build specific action
+cd actions/pr-review-stats
+pnpm build
 ```
