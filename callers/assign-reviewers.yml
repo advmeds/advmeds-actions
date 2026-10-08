@@ -1,0 +1,12 @@
+name: Assign PR Reviewers
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+jobs:
+  assign-reviewers:
+    permissions:
+      contents: read
+    uses: advmeds/advmeds-actions/.github/workflows/assign-reviewers.yml@v1
+    secrets: inherit
