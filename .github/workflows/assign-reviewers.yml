@@ -1,0 +1,194 @@
+name: Assign Reviewers
+
+on:
+  workflow_call:
+    inputs:
+      team:
+        description: 可被指派為 reviewer 的 team slug
+        type: string
+        default: f2e
+      passed-probation-team:
+        description: 已通過試用期成員的 team slug
+        type: string
+        default: f2e_passed_probation
+      senior-team:
+        description: 資深成員的 team slug
+        type: string
+        default: f2e_senior
+      exclude-paths:
+        description: 計算變更行數時要排除的路徑，一行一個 git pathspec glob
+        type: string
+        default: |
+          */swaggerTypescriptApi/**
+          */mCoreUI/**
+      dry-run:
+        description: 只在 log 印出挑選結果，不實際指派
+        type: boolean
+        default: false
+    secrets:
+      PERSONAL_ACCESS_TOKEN:
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  assign-reviewers:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    # 讀 team 成員與指派 reviewer 都走 PAT，GITHUB_TOKEN 只用來 checkout
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Measure change size
+        id: size
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          mapfile -t excluded < <(sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' <<< "$EXCLUDE_PATHS")
+          pathspecs=()
+          for pattern in "${excluded[@]}"; do
+            pathspecs+=(":(exclude)$pattern")
+          done
+
+          # binary 檔的 numstat 是 "-"，awk 會當成 0
+          total_lines=$(git diff --numstat "origin/$BASE_REF...HEAD" -- "${pathspecs[@]}" | awk '{ total += $1 + $2 } END { print total + 0 }')
+
+          echo "Changed lines: $total_lines, changed files: $CHANGED_FILES"
+          echo "total-lines=$total_lines" >> "$GITHUB_OUTPUT"
+          echo "changed-files=$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Get code owners
+        id: codeowners
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          owners=()
+          mapfile -d '' -t changed < <(git diff --name-only -z "origin/$BASE_REF...HEAD")
+
+          # 與 GitHub 找 CODEOWNERS 的順序相同，只取第一個存在的
+          for codeowners_file in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+            [ -f "$codeowners_file" ] || continue
+
+            while IFS= read -r line || [ -n "$line" ]; do
+              line="${line%$'\r'}"
+              read -ra fields <<< "${line%%#*}"
+              [ "${#fields[@]}" -ge 2 ] || continue
+
+              pattern="${fields[0]}"
+              for file in "${changed[@]}"; do
+                # shellcheck disable=SC2053
+                if [[ "$file" == $pattern ]]; then
+                  owners+=("${fields[@]:1}")
+                  break
+                fi
+              done
+            done < "$codeowners_file"
+            break
+          done
+
+          # 只留個人帳號並去掉開頭的 @，才能和 team 成員的 login 比對；@org/team 與 email 不處理
+          code_owners=$(printf '%s\n' "${owners[@]}" | jq -Rsc 'split("\n") | map(select(test("^@[^/]+$")) | ltrimstr("@")) | unique')
+
+          echo "Code owners: $code_owners"
+          echo "code-owners=$code_owners" >> "$GITHUB_OUTPUT"
+
+      - name: Get team members
+        id: teams
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          ORG: ${{ github.repository_owner }}
+          TEAM: ${{ inputs.team }}
+          PASSED_PROBATION_TEAM: ${{ inputs.passed-probation-team }}
+          SENIOR_TEAM: ${{ inputs.senior-team }}
+        run: |
+          members() {
+            gh api --paginate "/orgs/$ORG/teams/$1/members?per_page=100" --jq '.[].login' | jq -Rsc 'split("\n") | map(select(length > 0))'
+          }
+
+          {
+            echo "team=$(members "$TEAM")"
+            echo "passed-probation=$(members "$PASSED_PROBATION_TEAM")"
+            echo "senior=$(members "$SENIOR_TEAM")"
+          } >> "$GITHUB_OUTPUT"
+
+      # 這一步只吃 env、只寫 GITHUB_OUTPUT，test/assign-reviewers.test.mjs 會把它抽出來在本機執行
+      - name: Select reviewers
+        id: select
+        env:
+          TEAM_MEMBERS: ${{ steps.teams.outputs.team }}
+          PASSED_PROBATION_MEMBERS: ${{ steps.teams.outputs.passed-probation }}
+          SENIOR_MEMBERS: ${{ steps.teams.outputs.senior }}
+          CODE_OWNERS: ${{ steps.codeowners.outputs.code-owners }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          TOTAL_LINES: ${{ steps.size.outputs.total-lines }}
+          CHANGED_FILES: ${{ steps.size.outputs.changed-files }}
+        run: |
+          # 一行一個 JSON 字串再收回陣列：Windows 版 jq 輸出 CRLF 時，換行在 JSON 值之間只算空白，不會混進 login
+          shuffled=$(jq -c '.[]' <<< "$TEAM_MEMBERS" | shuf | jq -sc .)
+
+          result=$(jq -nc \
+            --argjson team "$TEAM_MEMBERS" \
+            --argjson shuffled "$shuffled" \
+            --argjson probation "$PASSED_PROBATION_MEMBERS" \
+            --argjson senior "$SENIOR_MEMBERS" \
+            --argjson owners "$CODE_OWNERS" \
+            --arg author "$PR_AUTHOR" \
+            --argjson lines "$TOTAL_LINES" \
+            --argjson files "$CHANGED_FILES" '
+            # GitHub login 不分大小寫
+            def listed($logins): ascii_downcase as $login | any($logins[]; ascii_downcase == $login);
+            def assignable: map(select(listed($owners + [$author]) | not));
+
+            # 由上而下第一個符合的生效
+            [
+              { lines: 50,       files: 3,        reviewers: 1 },
+              { lines: 200,      files: 10,       reviewers: 2 },
+              { lines: 500,      files: infinite, reviewers: 3 },
+              { lines: infinite, files: infinite, reviewers: 4 }
+            ] as $tiers
+
+            | ($team | assignable) as $available
+            | first($tiers[] | select($lines <= .lines and $files <= .files) | .reviewers) as $wanted
+            | ([$wanted, ($available | length)] | min) as $count
+
+            # 保障名額照 team 原本的順序取第一位，其餘名額才用洗牌結果
+            | (if $count >= 2 then [first($available[] | select(listed($probation)))] else [] end) as $probationSeat
+            | (if $count >= 3 then [first($available[] | select(listed($senior) and (listed($probationSeat) | not)))] else [] end) as $seniorSeat
+            | ($probationSeat + $seniorSeat) as $guaranteed
+
+            | {
+                available: $available,
+                count: $count,
+                selected: ($guaranteed + (($shuffled | assignable) - $guaranteed))[:$count]
+              }
+          ')
+
+          echo "Available reviewers: $(jq -r '.available | join(" ")' <<< "$result")"
+          echo "Reviewer count: $(jq -r '.count' <<< "$result")"
+          echo "Selected reviewers: $(jq -r '.selected | join(" ")' <<< "$result")"
+          echo "reviewers=$(jq -c '.selected' <<< "$result")" >> "$GITHUB_OUTPUT"
+
+      - name: Request reviewers
+        if: steps.select.outputs.reviewers != '[]'
+        env:
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEWERS: ${{ steps.select.outputs.reviewers }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            echo "dry-run: would request $REVIEWERS"
+            exit 0
+          fi
+
+          jq -c '{ reviewers: . }' <<< "$REVIEWERS" |
+            gh api "repos/$REPO/pulls/$PR_NUMBER/requested_reviewers" --method POST --input -
