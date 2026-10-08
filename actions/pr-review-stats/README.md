@@ -15,7 +15,7 @@ jobs:
 
       - name: Get PR Stats
         id: pr-stats
-        uses: advmeds/advmeds-actions/actions/pr-review-stats@main
+        uses: advmeds/advmeds-actions/actions/pr-review-stats@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 

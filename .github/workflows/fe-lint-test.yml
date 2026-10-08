@@ -24,7 +24,7 @@ jobs:
       - name: PR Review Stats
         id: pr-stats
         # reusable workflow 裡的 `uses: ./` 會解析到呼叫端 repo，所以要寫完整路徑；建立 v1 浮動 tag 後改成 @v1
-        uses: advmeds/advmeds-actions/actions/pr-review-stats@main
+        uses: advmeds/advmeds-actions/actions/pr-review-stats@v1
         with:
           github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
