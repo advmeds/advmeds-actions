@@ -1,0 +1,17 @@
+name: release-please
+
+on:
+  push:
+    branches:
+      - release
+  workflow_dispatch:
+
+jobs:
+  release-please:
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: advmeds/advmeds-actions/.github/workflows/release-please.yml@v1
+    with:
+      target-branch: release
+    secrets: inherit

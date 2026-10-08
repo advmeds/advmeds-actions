@@ -1,0 +1,217 @@
+name: FE Lint Test
+
+on:
+  workflow_call:
+    secrets:
+      PERSONAL_ACCESS_TOKEN:
+        required: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-approval:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'run-tests')
+      || (github.event_name == 'pull_request_review' && github.event.action == 'submitted')
+    runs-on: ubuntu-latest
+    # pr-review-stats 用的是 PAT，這個 job 完全不需要 GITHUB_TOKEN
+    permissions: {}
+    outputs:
+      should-run: ${{ steps.gate.outputs.should-run }}
+    steps:
+      - name: PR Review Stats
+        id: pr-stats
+        # reusable workflow 裡的 `uses: ./` 會解析到呼叫端 repo，所以要寫完整路徑；建立 v1 浮動 tag 後改成 @v1
+        uses: advmeds/advmeds-actions/actions/pr-review-stats@main
+        with:
+          github-token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Set gate output
+        id: gate
+        env:
+          ALL_APPROVED: ${{ steps.pr-stats.outputs.all-approved }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          if [[ "$ALL_APPROVED" == "true" || "$LABEL_NAME" == "run-tests" ]]; then
+            echo "should-run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint-test:
+    needs: check-approval
+    if: needs.check-approval.outputs.should-run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # 加、移除 PR label
+      pull-requests: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 要有 base branch 的歷史才能做三點 diff
+          fetch-depth: 0
+
+      # 不指定 version：由 package.json 的 packageManager 決定
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Get changed files
+        id: changed
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          dir="$RUNNER_TEMP/fe-lint-test"
+          mkdir -p "$dir"
+
+          git diff --name-only -z --diff-filter=ACMRT "origin/$BASE_REF...HEAD" > "$dir/changed"
+
+          # 檔名以 NUL 分隔存檔，後面用 xargs -0 餵給工具，空白或特殊字元都不會被拆開
+          pick() {
+            grep -zE "\.($1)\$" "$dir/changed" > "$dir/$2" || true
+            echo "$2=$(tr -cd '\0' < "$dir/$2" | wc -c | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          }
+          pick 'vue|js|jsx|cjs|mjs|ts|tsx|cts|mts' js-files
+          pick 'vue|css|scss|sass|less' css-files
+
+      # 所有檢查的清單只寫在這裡：要不要跑、為什麼跳過都在這一步決定，
+      # 後面的 summary 與最終判定讀同一份清單
+      - name: Plan checks
+        id: plan
+        env:
+          JS_FILES: ${{ steps.changed.outputs.js-files }}
+          CSS_FILES: ${{ steps.changed.outputs.css-files }}
+        run: |
+          checks="$RUNNER_TEMP/fe-lint-test/checks.tsv"
+          : > "$checks"
+
+          missing_bin() { [ -e "node_modules/.bin/$1" ] || echo "node_modules/.bin/$1 not found"; }
+          missing_script() { jq -e --arg name "$1" '.scripts[$name] != null' package.json > /dev/null || echo "no \"$1\" script in package.json"; }
+          no_files() { [ "$1" -gt 0 ] || echo "no changed $2 files"; }
+
+          # plan <step id> <skip reason>：reason 取第一個非空的參數，全空代表要跑
+          plan() {
+            local id="$1" reason=''
+            shift
+            for reason in "$@"; do
+              [ -z "$reason" ] || break
+            done
+            printf '%s\t%s\n' "$id" "$reason" >> "$checks"
+            if [ -z "$reason" ]; then
+              echo "$id=true" >> "$GITHUB_OUTPUT"
+              echo "run   $id"
+            else
+              echo "skip  $id ($reason)"
+            fi
+          }
+
+          plan eslint     "$(missing_bin eslint)"        "$(no_files "$JS_FILES" JS/TS/Vue)"
+          plan stylelint  "$(missing_bin stylelint)"     "$(no_files "$CSS_FILES" CSS/Vue)"
+          plan prettier   "$(missing_bin prettier)"      "$(no_files "$JS_FILES" JS/TS/Vue)"
+          plan type-check "$(missing_script type-check)" "$(no_files "$JS_FILES" JS/TS/Vue)"
+          plan test-unit  "$(missing_script test:unit)"
+          plan ci-extra   "$(missing_script ci:extra)"
+
+      - name: ESLint
+        id: eslint
+        if: steps.plan.outputs.eslint == 'true'
+        continue-on-error: true
+        run: xargs -0 pnpm exec eslint < "$RUNNER_TEMP/fe-lint-test/js-files"
+
+      - name: Stylelint
+        id: stylelint
+        if: steps.plan.outputs.stylelint == 'true'
+        continue-on-error: true
+        run: xargs -0 pnpm exec stylelint < "$RUNNER_TEMP/fe-lint-test/css-files"
+
+      - name: Prettier
+        id: prettier
+        if: steps.plan.outputs.prettier == 'true'
+        continue-on-error: true
+        run: xargs -0 pnpm exec prettier --check < "$RUNNER_TEMP/fe-lint-test/js-files"
+
+      - name: Type check
+        id: type-check
+        if: steps.plan.outputs.type-check == 'true'
+        continue-on-error: true
+        run: pnpm run type-check
+
+      - name: Unit tests
+        id: test-unit
+        if: steps.plan.outputs.test-unit == 'true'
+        continue-on-error: true
+        run: pnpm run test:unit
+
+      - name: Extra checks
+        id: ci-extra
+        if: steps.plan.outputs.ci-extra == 'true'
+        continue-on-error: true
+        run: pnpm run ci:extra
+
+      - name: Check results
+        env:
+          STEPS: ${{ toJSON(steps) }}
+        run: |
+          failed=0
+          {
+            echo '| Check | Result |'
+            echo '| --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\t' read -r id reason; do
+            outcome=$(jq -r --arg id "$id" '.[$id].outcome // "missing"' <<< "$STEPS")
+            # 計畫要跑的檢查只有 success 算過；找不到對應 step id 也算失敗，避免清單與 step 對不上時默默放行
+            if [ -n "$reason" ]; then
+              result="skipped: $reason"
+            elif [ "$outcome" = success ]; then
+              result='passed'
+            else
+              result="failed ($outcome)"
+              failed=1
+            fi
+            echo "$id: $result"
+            echo "| $id | $result |" >> "$GITHUB_STEP_SUMMARY"
+          done < "$RUNNER_TEMP/fe-lint-test/checks.tsv"
+
+          exit "$failed"
+
+      - name: Add label when all checks passed
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: context.issue.number,
+                labels: ['✅state: waiting update'],
+              })
+            } catch (error) {
+              core.warning(`Failed to add label: ${error.message}`)
+            }
+
+      - name: Remove run-tests label
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.removeLabel({
+                ...context.repo,
+                issue_number: context.issue.number,
+                name: 'run-tests',
+              })
+            } catch (error) {
+              // 由 review 觸發時 PR 上本來就沒有這個 label
+              if (error.status !== 404) core.warning(`Failed to remove label: ${error.message}`)
+            }
