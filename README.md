@@ -31,7 +31,7 @@ Monorepo for custom GitHub Actions
 | 項目 | 用途 |
 | --- | --- |
 | `engines.node` | Node 版本（`actions/setup-node` 的 `node-version-file: package.json`） |
-| `packageManager` | pnpm 版本（`pnpm/action-setup`），例如 `pnpm@9.15.6` |
+| `packageManager` | pnpm 版本（`pnpm/action-setup`），例如 `pnpm@10.34.9` |
 | `scripts.type-check` | 有這個 script 且有 JS／TS／Vue 檔變更時執行 |
 | `scripts.test:unit` | 有這個 script 就執行 |
 | `scripts.ci:extra` | 有這個 script 就執行；repo 專屬的檢查（Vite build、NX lint 等）放這裡 |
