@@ -36,6 +36,8 @@ Monorepo for custom GitHub Actions
 | `scripts.test:unit` | 有這個 script 就執行 |
 | `scripts.ci:extra` | 有這個 script 就執行；repo 專屬的檢查（Vite build、NX lint 等）放這裡 |
 
+依賴 GitHub Packages 私有套件（例如 `@advmeds/mcore_frontend`）時，安裝步驟用 caller 的 `GITHUB_TOKEN` 認證。到套件頁的 **Package settings → Manage Actions access** 把 caller repo 加進去（Read 即可），否則安裝會回 401 或 403。
+
 Lint 工具只檢查 PR 相對於 base branch 有變更的檔案，而且只有在 `node_modules/.bin` 找得到該工具時才執行：
 
 | Binary | 檢查的副檔名 |
