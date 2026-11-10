@@ -45,7 +45,6 @@ jobs:
     if: needs.check-approval.outputs.should-run == 'true'
     runs-on: ubuntu-latest
     # 不寫 permissions：沿用 caller 給的權限（至少要 contents: read、pull-requests: write）。
-    # 用到 GitHub Packages 私有套件的 repo 由 caller 自行加 packages: read，其他 caller 不必改
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -62,7 +61,6 @@ jobs:
           node-version-file: package.json
           cache: pnpm
 
-      # repo 的 .npmrc 只宣告 registry 位置，token 寫進 runner 的使用者層 ~/.npmrc。
       # GITHUB_TOKEN 能讀私有套件的前提：套件設定的 Manage Actions access 已加入 caller repo
       - name: Install dependencies
         env:
