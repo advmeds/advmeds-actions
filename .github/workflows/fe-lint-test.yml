@@ -44,10 +44,7 @@ jobs:
     needs: check-approval
     if: needs.check-approval.outputs.should-run == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      # 加、移除 PR label
-      pull-requests: write
+    # 不寫 permissions：沿用 caller 給的權限（至少要 contents: read、pull-requests: write）。
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -64,8 +61,13 @@ jobs:
           node-version-file: package.json
           cache: pnpm
 
+      # GITHUB_TOKEN 能讀私有套件的前提：套件設定的 Manage Actions access 已加入 caller repo
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
+          pnpm install --frozen-lockfile
 
       - name: Get changed files
         id: changed
