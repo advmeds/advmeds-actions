@@ -3,6 +3,7 @@
   "version": "1.1.1",
   "description": "Monorepo for custom GitHub Actions",
   "private": true,
+  "packageManager": "pnpm@10.34.9",
   "scripts": {
     "build": "pnpm -r build",
     "test": "node --test --test-reporter=spec test/assign-reviewers.test.mjs"
