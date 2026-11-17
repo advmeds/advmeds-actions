@@ -101,20 +101,13 @@ jobs:
 
 設定檔路徑固定為 `.github/release-please-config.json` 與 `.github/.release-please-manifest.json`。
 
-| Output | 說明 |
-| --- | --- |
-| `release-created` | 這次執行建立了 release 時為 `true` |
-| `major` | 新 release 的 major 版號 |
-| `sha` | 新 release 指向的 commit |
-
 ## 發版
 
-本 repo 也用 release-please 發版（[`release.yml`](./.github/workflows/release.yml)）：
+1. Feature 分支發 PR 到 `release`。合併後 [`release.yml`](./.github/workflows/release.yml) 執行 release-please，在 `release` 上開或更新 release PR。`feat` 升 minor、`fix` 升 patch，其他 type 不會觸發發版。
+2. 合併 release PR 後，在 `release` 上建立 `vX.Y.Z` tag 與 GitHub Release。
+3. 發 PR 把 `release` 合併進 `main`（用 merge commit，不要 squash）。合併後 [`update-major-tag.yml`](./.github/workflows/update-major-tag.yml) 會把 `v<major>` tag（例如 `v1`）移到 `main` 的最新 commit，caller 下次執行就會用到新版。
 
-1. PR 合併進 `main` 後，release-please 會開或更新 release PR。`feat` 升 minor、`fix` 升 patch，其他 type 不會觸發發版。
-2. 合併 release PR 後會建立 `vX.Y.Z` tag 與 GitHub Release，並把 `v<major>` tag（例如 `v1`）移到同一個 commit，caller 下次執行就會用到新版。
-
-不要手動移動 `v1`。要立即發版就合併 release PR。
+`main` 上的版本還沒在 `release` 發佈時不會移動 tag。不要手動移動 `v1`。
 
 ## Development
 

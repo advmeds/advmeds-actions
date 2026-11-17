@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     branches:
-      - main
+      - release
   workflow_dispatch:
 
 jobs:
@@ -13,27 +13,5 @@ jobs:
       pull-requests: write
     uses: ./.github/workflows/release-please.yml
     with:
-      target-branch: main
+      target-branch: release
     secrets: inherit
-
-  # caller 都 pin 在 `@v<major>`，每次發版把它移到新 release
-  update-major-tag:
-    needs: release-please
-    if: needs.release-please.outputs.release-created == 'true'
-    runs-on: ubuntu-latest
-    permissions: {}
-    steps:
-      - name: Move major tag
-        env:
-          # tag 指向的 commit 若改到 .github/workflows/，GITHUB_TOKEN 沒有權限更新，所以用 PAT
-          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
-          REPO: ${{ github.repository }}
-          TAG: v${{ needs.release-please.outputs.major }}
-          SHA: ${{ needs.release-please.outputs.sha }}
-        run: |
-          if gh api "repos/$REPO/git/ref/tags/$TAG" > /dev/null 2>&1; then
-            gh api -X PATCH "repos/$REPO/git/refs/tags/$TAG" -f sha="$SHA" -F force=true > /dev/null
-          else
-            gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" > /dev/null
-          fi
-          echo "$TAG -> $SHA" >> "$GITHUB_STEP_SUMMARY"
