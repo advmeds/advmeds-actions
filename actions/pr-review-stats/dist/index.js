@@ -1,6 +1,46 @@
 /******/ (() => { // webpackBootstrap
 /******/ 	var __webpack_modules__ = ({
 
+/***/ 6188:
+/***/ ((module) => {
+
+// GitHub 的審核狀態規則：COMMENTED 不會蓋掉之前的 APPROVED / CHANGES_REQUESTED，
+// DISMISSED 則會讓那個人回到「沒有表態」。
+const DECISIVE_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"]);
+
+function summarizeReviews({ author, reviews, requestedReviewers, requestedTeams }) {
+  const stateByUser = new Map();
+  for (const review of reviews) {
+    const login = review.user?.login;
+    // PR 作者回覆 review thread 也會產生 COMMENTED review，不算 reviewer
+    if (!login || login === author) continue;
+    if (DECISIVE_STATES.has(review.state) || !stateByUser.has(login)) {
+      stateByUser.set(login, review.state);
+    }
+  }
+
+  // 被重新要求 review 的人，之前的 Approve 不算數
+  for (const login of requestedReviewers) {
+    stateByUser.set(login, "PENDING");
+  }
+
+  const reviewersCount = stateByUser.size + requestedTeams.length;
+  const approvedCount = [...stateByUser.values()].filter(
+    (state) => state === "APPROVED",
+  ).length;
+
+  return {
+    reviewersCount,
+    approvedCount,
+    allApproved: approvedCount > 0 && approvedCount === reviewersCount,
+  };
+}
+
+module.exports = { summarizeReviews };
+
+
+/***/ }),
+
 /***/ 4156:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -2035,7 +2075,7 @@ const Context = __importStar(__nccwpck_require__(6835));
 const Utils = __importStar(__nccwpck_require__(2505));
 // octokit + plugins
 const core_1 = __nccwpck_require__(5600);
-const plugin_rest_endpoint_methods_1 = __nccwpck_require__(590);
+const plugin_rest_endpoint_methods_1 = __nccwpck_require__(2761);
 const plugin_paginate_rest_1 = __nccwpck_require__(1968);
 exports.context = new Context.Context();
 const baseUrl = Utils.getApiBaseUrl();
@@ -4395,7 +4435,7 @@ exports.paginatingEndpoints = paginatingEndpoints;
 
 /***/ }),
 
-/***/ 590:
+/***/ 2761:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
@@ -34490,10 +34530,10 @@ module.exports = /*#__PURE__*/JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45
 var __webpack_exports__ = {};
 const core = __nccwpck_require__(4442);
 const github = __nccwpck_require__(6845);
+const { summarizeReviews } = __nccwpck_require__(6188);
 
 async function run() {
   try {
-    // 取得 Workflow 中傳入的 token (需要 repo 權限)
     const token = core.getInput("github-token", { required: true });
     const octokit = github.getOctokit(token);
     const context = github.context;
@@ -34503,63 +34543,32 @@ async function run() {
       return;
     }
 
-    const prNumber = context.payload.pull_request.number;
-    const owner = context.repo.owner;
-    const repo = context.repo.repo;
+    const params = {
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      pull_number: context.payload.pull_request.number,
+    };
 
-    // 1. 取得 PR 詳細資訊 (包含 "已經被要求但尚未審核" 的人)
-    const { data: pr } = await octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: prNumber,
+    const { data: pr } = await octokit.rest.pulls.get(params);
+    const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, {
+      ...params,
+      per_page: 100,
     });
 
-    // 2. 取得所有的 Reviews 記錄
-    const { data: reviews } = await octokit.rest.pulls.listReviews({
-      owner,
-      repo,
-      pull_number: prNumber,
+    const { reviewersCount, approvedCount, allApproved } = summarizeReviews({
+      author: pr.user.login,
+      reviews,
+      requestedReviewers: pr.requested_reviewers.map((user) => user.login),
+      requestedTeams: pr.requested_teams.map((team) => team.slug),
     });
 
-    // 處理邏輯：
-    // 一個人可能重複提交多次 Review，我們只看最後一次
-    const latestReviews = {};
-    reviews.forEach((review) => {
-      latestReviews[review.user.login] = review.state;
-    });
-
-    const approvedUsers = Object.values(latestReviews).filter(
-      (state) => state === "APPROVED",
-    );
-    const changesRequested = Object.values(latestReviews).filter(
-      (state) => state === "CHANGES_REQUESTED",
-    );
-
-    // 計算 Reviewers 數量：
-    // 包含「已經審核過的人」+「被要求了但還沒審核的人」
-    const requestedReviewersCount = pr.requested_reviewers.length;
-    const uniqueReviewersWhoActed = Object.keys(latestReviews).length;
-    const totalReviewersCount =
-      requestedReviewersCount + uniqueReviewersWhoActed;
-
-    const approvedCount = approvedUsers.length;
-
-    // 判斷條件：
-    // 1. 至少有一個人 Approved
-    // 2. 全部被要求的人都已經 Approved (意即沒有人 Pending 且沒有人提出 Changes Requested)
-    const isAllApproved =
-      approvedCount > 0 &&
-      requestedReviewersCount === 0 &&
-      changesRequested.length === 0;
-
-    // 輸出結果
-    core.setOutput("reviewers-count", totalReviewersCount);
+    core.setOutput("reviewers-count", reviewersCount);
     core.setOutput("approved-count", approvedCount);
-    core.setOutput("all-approved", isAllApproved);
+    core.setOutput("all-approved", allApproved);
 
-    console.log(`總 Reviewers: ${totalReviewersCount}`);
+    console.log(`總 Reviewers: ${reviewersCount}`);
     console.log(`Approved 人數: ${approvedCount}`);
-    console.log(`是否全數通過: ${isAllApproved}`);
+    console.log(`是否全數通過: ${allApproved}`);
   } catch (error) {
     core.setFailed(error.message);
   }
