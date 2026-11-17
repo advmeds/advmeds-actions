@@ -101,6 +101,21 @@ jobs:
 
 設定檔路徑固定為 `.github/release-please-config.json` 與 `.github/.release-please-manifest.json`。
 
+| Output | 說明 |
+| --- | --- |
+| `release-created` | 這次執行建立了 release 時為 `true` |
+| `major` | 新 release 的 major 版號 |
+| `sha` | 新 release 指向的 commit |
+
+## 發版
+
+本 repo 也用 release-please 發版（[`release.yml`](./.github/workflows/release.yml)）：
+
+1. PR 合併進 `main` 後，release-please 會開或更新 release PR。`feat` 升 minor、`fix` 升 patch，其他 type 不會觸發發版。
+2. 合併 release PR 後會建立 `vX.Y.Z` tag 與 GitHub Release，並把 `v<major>` tag（例如 `v1`）移到同一個 commit，caller 下次執行就會用到新版。
+
+不要手動移動 `v1`。要立即發版就合併 release PR。
+
 ## Development
 
 This project uses pnpm workspaces for monorepo management.
