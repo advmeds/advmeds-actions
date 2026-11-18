@@ -1,0 +1,41 @@
+name: Update Major Tag
+
+# caller 都 pin 在 `@v<major>`，release 合併進 main 後把它移到 main 的最新 commit
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  update-major-tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/.release-please-manifest.json
+          sparse-checkout-cone-mode: false
+
+      - name: Move major tag
+        env:
+          # tag 指向的 commit 若改到 .github/workflows/，GITHUB_TOKEN 沒有權限更新，所以用 PAT
+          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          version=$(jq -r '."."' .github/.release-please-manifest.json)
+          tag="v${version%%.*}"
+
+          # 版本還沒在 release 分支發佈就不移，避免把未發版的內容推給 caller
+          if ! gh api "repos/$REPO/git/ref/tags/v$version" > /dev/null 2>&1; then
+            echo "::notice::v$version 尚未發佈，不移動 $tag"
+            exit 0
+          fi
+
+          if gh api "repos/$REPO/git/ref/tags/$tag" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/tags/$tag" -f sha="$GITHUB_SHA" -F force=true > /dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/tags/$tag" -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          echo "$tag -> $GITHUB_SHA（v$version）" >> "$GITHUB_STEP_SUMMARY"
