@@ -53,8 +53,8 @@ jobs:
           # 要有 base branch 的歷史才能做三點 diff
           fetch-depth: 0
 
-      # 不指定 version：由 package.json 的 packageManager 決定
-      - uses: pnpm/action-setup@v4
+      # 不指定 version：由 package.json 的 packageManager 決定。pnpm 12 要 v6.1.0 以上
+      - uses: pnpm/action-setup@v6.1.1
 
       - uses: actions/setup-node@v4
         with:
